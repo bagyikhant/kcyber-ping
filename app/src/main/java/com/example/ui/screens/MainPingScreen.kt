@@ -1,6 +1,11 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -26,17 +31,22 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -67,6 +77,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.network.PingConfig
 import com.example.network.PingProtocol
 import com.example.ui.PingViewModel
@@ -94,8 +105,23 @@ fun MainPingScreen(
     val config by viewModel.pingConfig.collectAsState()
     val session by viewModel.sessionState.collectAsState()
     val vibrate by viewModel.vibrateOnPacket.collectAsState()
+    val vibrateLoss by viewModel.vibrateOnLoss.collectAsState()
+    val showNotification by viewModel.showNotification.collectAsState()
 
     var showAdvancedSettings by remember { mutableStateOf(false) }
+
+    // Notification Permission Launcher (Android 13+)
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.showNotification.value = true
+            Toast.makeText(context, "Notification permission enabled for background monitoring", Toast.LENGTH_SHORT).show()
+        } else {
+            viewModel.showNotification.value = false
+            Toast.makeText(context, "Notification permission denied", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val quickPresets = listOf(
         "8.8.8.8" to "Google DNS",
@@ -286,7 +312,7 @@ fun MainPingScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Advanced Parameters (Packets, Size, Interval)",
+                            text = "Advanced Parameters (Packets, Size, Interval, Haptics)",
                             fontSize = 12.sp,
                             color = CyberTextSecondary
                         )
@@ -307,7 +333,7 @@ fun MainPingScreen(
                             .clip(RoundedCornerShape(10.dp))
                             .background(com.example.ui.theme.CyberBg)
                             .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         // Packet Count Selector
                         Row(
@@ -393,16 +419,16 @@ fun MainPingScreen(
                             }
                         }
 
-                        // Vibration Toggle
+                        // Haptic Packet Loss Alert Toggle
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Haptic Feedback on Packet", fontSize = 12.sp, color = CyberTextSecondary)
+                            Text("Vibrate Pulse on Packet Loss", fontSize = 12.sp, color = CyberTextSecondary)
                             Switch(
-                                checked = vibrate,
-                                onCheckedChange = { viewModel.vibrateOnPacket.value = it },
+                                checked = vibrateLoss,
+                                onCheckedChange = { viewModel.vibrateOnLoss.value = it },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = com.example.ui.theme.CyberBg,
                                     checkedTrackColor = CyberCyan,
@@ -411,6 +437,200 @@ fun MainPingScreen(
                                 )
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // Quick Controls: Notification Bar & Vibration On/Off Card
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(CyberSurfaceCard)
+                .border(1.dp, CyberBorder, RoundedCornerShape(14.dp))
+                .padding(14.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Section Title
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "BACKGROUND & HAPTICS CONTROLS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyberCyan,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                }
+
+                // 1. Notification Bar (Foreground & Background running)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (showNotification) CyberCyan.copy(alpha = 0.15f) else CyberSurfaceCardElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (showNotification) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
+                                contentDescription = "Notification Bar",
+                                tint = if (showNotification) CyberCyan else CyberTextMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Show in Notification Bar",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CyberTextPrimary
+                            )
+                            Text(
+                                text = "Foreground & background live latency monitor",
+                                fontSize = 11.sp,
+                                color = CyberTextSecondary
+                            )
+                        }
+                    }
+
+                    Switch(
+                        checked = showNotification,
+                        onCheckedChange = { isEnabled ->
+                            if (isEnabled) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    val hasPermission = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    ) == PackageManager.PERMISSION_GRANTED
+
+                                    if (!hasPermission) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        viewModel.showNotification.value = true
+                                    }
+                                } else {
+                                    viewModel.showNotification.value = true
+                                }
+                            } else {
+                                viewModel.showNotification.value = false
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = com.example.ui.theme.CyberBg,
+                            checkedTrackColor = CyberCyan,
+                            uncheckedThumbColor = CyberTextSecondary,
+                            uncheckedTrackColor = CyberSurfaceCardElevated
+                        )
+                    )
+                }
+
+                // 2. Vibration On / Off
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (vibrate) CyberGreen.copy(alpha = 0.15f) else CyberSurfaceCardElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Vibration,
+                                contentDescription = "Vibration",
+                                tint = if (vibrate) CyberGreen else CyberTextMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Vibration",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CyberTextPrimary
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(if (vibrate) CyberGreen.copy(alpha = 0.2f) else CyberBorder)
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = if (vibrate) "ON" else "OFF",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (vibrate) CyberGreen else CyberTextMuted
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Tactile haptic pulse on ping response",
+                                fontSize = 11.sp,
+                                color = CyberTextSecondary
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (vibrate) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(CyberSurfaceCardElevated)
+                                    .border(1.dp, CyberBorder, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        viewModel.testVibration()
+                                        Toast.makeText(context, "Testing haptic tick...", Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = "TEST",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CyberCyan
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = vibrate,
+                            onCheckedChange = { viewModel.vibrateOnPacket.value = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = com.example.ui.theme.CyberBg,
+                                checkedTrackColor = CyberGreen,
+                                uncheckedThumbColor = CyberTextSecondary,
+                                uncheckedTrackColor = CyberSurfaceCardElevated
+                            )
+                        )
                     }
                 }
             }
@@ -441,6 +661,16 @@ fun MainPingScreen(
                 if (session.isRunning) {
                     viewModel.stopPing()
                 } else {
+                    // Check notification permission if notification is enabled and on Android 13+
+                    if (showNotification && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val hasPerm = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!hasPerm) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
                     viewModel.startPing()
                 }
             },
@@ -475,3 +705,4 @@ fun MainPingScreen(
         PingTerminalLog(logs = session.logs)
     }
 }
+

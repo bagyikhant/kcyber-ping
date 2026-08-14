@@ -24,6 +24,7 @@ import com.example.network.PingProtocol
 import com.example.network.PingSessionState
 import com.example.network.PortScanResult
 import com.example.network.TracerouteHop
+import com.example.service.PingForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,11 +100,20 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
 
     // Settings
     val vibrateOnPacket = MutableStateFlow(true)
+    val vibrateOnLoss = MutableStateFlow(true)
+    val showNotification = MutableStateFlow(true)
 
     init {
         initDefaultBenchmarkList()
         seedPresetHosts()
         refreshNetworkInfo()
+
+        // Listen to Stop trigger from notification bar action
+        viewModelScope.launch {
+            PingForegroundService.stopEvents.collect {
+                stopPing()
+            }
+        }
     }
 
     private fun seedPresetHosts() {
@@ -160,6 +170,17 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
             logs = listOf("Starting ${config.protocol.name} ping to $cleanHost...")
         )
 
+        // Start Foreground Service with live notification if enabled
+        if (showNotification.value) {
+            try {
+                PingForegroundService.startService(
+                    getApplication(),
+                    cleanHost,
+                    config.protocol.name
+                )
+            } catch (_: Exception) { }
+        }
+
         pingJob = viewModelScope.launch(Dispatchers.IO) {
             val resolved = PingEngine.resolveHostIp(cleanHost)
             _sessionState.update { it.copy(resolvedIp = resolved) }
@@ -185,13 +206,16 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .collect { packet ->
                     sent++
-                    if (packet.status == PacketStatus.SUCCESS && packet.timeMs > 0f) {
+                    val isSuccess = packet.status == PacketStatus.SUCCESS && packet.timeMs > 0f
+                    if (isSuccess) {
                         received++
                         minMs = min(minMs, packet.timeMs)
                         maxMs = max(maxMs, packet.timeMs)
                         sumMs += packet.timeMs
                         latencies.add(packet.timeMs)
-                        if (vibrateOnPacket.value) triggerHapticFeedback()
+                        if (vibrateOnPacket.value) triggerHapticFeedback(isLoss = false)
+                    } else {
+                        if (vibrateOnPacket.value && vibrateOnLoss.value) triggerHapticFeedback(isLoss = true)
                     }
 
                     packetList.add(0, packet) // newest first
@@ -210,6 +234,8 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
                     logs.add(packet.message)
                     if (logs.size > 150) logs.removeAt(0)
 
+                    val validMin = if (minMs == Float.MAX_VALUE) 0f else minMs
+
                     _sessionState.value = PingSessionState(
                         isRunning = true,
                         targetHost = cleanHost,
@@ -219,13 +245,32 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
                         packetsSent = sent,
                         packetsReceived = received,
                         packetLossPercent = loss,
-                        minLatencyMs = if (minMs == Float.MAX_VALUE) 0f else minMs,
+                        minLatencyMs = validMin,
                         avgLatencyMs = avg,
                         maxLatencyMs = maxMs,
                         jitterMs = jitter,
                         currentLatencyMs = packet.timeMs,
                         logs = logs.toList()
                     )
+
+                    // Update live notification in status bar
+                    if (showNotification.value) {
+                        try {
+                            PingForegroundService.updateProgress(
+                                context = getApplication(),
+                                host = cleanHost,
+                                protocol = config.protocol.name,
+                                latencyMs = packet.timeMs,
+                                avgMs = avg,
+                                minMs = validMin,
+                                maxMs = maxMs,
+                                sent = sent,
+                                recv = received,
+                                loss = loss,
+                                jitter = jitter
+                            )
+                        } catch (_: Exception) { }
+                    }
                 }
 
             // Session completed naturally
@@ -242,6 +287,11 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
     private fun finalizeSession() {
         val current = _sessionState.value
         _sessionState.update { it.copy(isRunning = false) }
+
+        // Stop foreground service
+        try {
+            PingForegroundService.stopService(getApplication())
+        } catch (_: Exception) { }
 
         if (current.packetsSent > 0) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -451,16 +501,36 @@ class PingViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun triggerHapticFeedback() {
+    fun testVibration() {
+        triggerHapticFeedback(isLoss = false)
+    }
+
+    private fun triggerHapticFeedback(isLoss: Boolean = false) {
+        if (!vibrateOnPacket.value) return
         try {
             val app = getApplication<Application>()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vibratorManager = app.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                vibratorManager?.defaultVibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                val vibrator = vibratorManager?.defaultVibrator
+                if (isLoss) {
+                    vibrator?.vibrate(
+                        VibrationEffect.createWaveform(
+                            longArrayOf(0, 45, 60, 45),
+                            -1
+                        )
+                    )
+                } else {
+                    vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                }
             } else {
                 @Suppress("DEPRECATION")
                 val vibrator = app.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                vibrator?.vibrate(VibrationEffect.createOneShot(15, VibrationEffect.DEFAULT_AMPLITUDE))
+                if (isLoss) {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(longArrayOf(0, 45, 60, 45), -1)
+                } else {
+                    vibrator?.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE))
+                }
             }
         } catch (_: Exception) { }
     }
